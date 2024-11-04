@@ -30,9 +30,11 @@ public class FetchUserDataReaderConfig implements ItemReader<UserDTO> {
     private List<UserDTO> users = new ArrayList<>();
     private int userIndex = 0;
 
+    //quantos usuários processar por vez
     @Value("${chunkSize}")
     private int chunkSize;
 
+    //quantos registros obter por vez da API
     @Value("${pageSize}")
     private int pageSize;
 

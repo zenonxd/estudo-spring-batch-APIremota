@@ -278,11 +278,13 @@ Exemplo: se o Size da URI for 10 e o chunksize for 5, teremos dois chunks.
 Criaremos uma classe ``FetchUserDataReaderConfig`` no pacote reader. Ela implementará ``ItemReader<UserDTO>``, visto que
 já sabemos que o UserDTO será uma cópia dos dados consultados.
 
-Criaremos um método para conectar na API remota.
+A primeira coisa, é criar um método para conectar na API remota. Chameremos de "fetchUserDataFromAPI".
 
-### RestTemplate
+Ele usará o RestTemplate.
 
-Faz parte do Spring Web, é um cliente http que iremos utilizar e conseguir conectar na API remota que  está na nossa 
+### RestTemplate - Objeto para realizar chamadas HTTP.
+
+Faz parte do Spring Web, é um cliente http que iremos utilizar e conseguir conectar na API remota que está na nossa 
 máquina (mas poderia estar em qualquer outro servidor da web).
 
 O RestTemplate nos permite usar o ``.exchange()``, dentro dele iremos passar:
@@ -309,13 +311,15 @@ public class ResponseUser {
 }
 ```
 
-Voltando para a UserDataReader, passaremos a classe criada no quarto parâmetro da seguinte forma 
+Voltando para a FetchUserDataReader, passaremos a classe criada no quarto parâmetro da seguinte forma 
 ``new ParameterizedTypeReference<ResponseUser>() {});``. Após isso, o método fica pronto. Esse RestTemplate com exchange,
-retornará um ResponseEntity<ResponseUser>, então alocaremos em uma variável.
+retornará um ``ResponseEntity<ResponseUser>``, então alocaremos em uma variável.
 
-Depois, é só criar uma List<UserDTO> e dar um ``response.getBody().getContent();``
+Depois, é só criar uma ``List<UserDTO>`` e dar um ``response.getBody().getContent();``
 
 ![img_12.png](img_12.png)
+
+Agora, implementaremos o método read (da interface ItemReader)
 
 ### Função read
 
@@ -325,7 +329,7 @@ Um chunk terá vários registros, para cada registro (usuário) a função read 
 
 Precisamos criar uma lógica para que enquanto tivermos registro na nossa lista de Users, a gente retorne um objeto User.
 
-Primeiro, vamos criar a lista para armazenar esses usuários.
+Primeiro, vamos criar a lista para armazenar esses usuários (fora do escopo mesmo).
 
 Depois, criaremos um índice para percorrer a lista. Afinal, quando os dados acabarem (for null), encerraremos.
 
@@ -336,7 +340,7 @@ está sendo incrementado), instanciaremos um User.
 
 Quando a posição do index for maior que a lista, retornaremos null.
 
-### Lidando com eventos Spring Batch - Carregando a lista Users
+### Lidando com eventos Spring Batch - Carregando a lista Users (Before and After Chunk)
 
 Assim que buscamos os dados na API e sabemos o tamanho do chunk, queremos carregar a nossa lista de users. 
 
@@ -345,6 +349,8 @@ Para isso, iremos trabalhar com eventos que pode nos auxiliar. Quem define o eve
 Ou seja, assim que chamarmos nosso batch, podemos carregar a nossa lista de Users.
 
 Teremos um evento antes de chamar o chunk (BeforeChunk).
+
+#### BeforeChunk
 
 Assim como o chunkSize está definido no properties, coloque também o ``pageSize=10``.
 
@@ -358,6 +364,8 @@ Voltando para a função da API, colocaremos agora o pageSize nela:
 
 Agora, teremos outro evento! O AfterChunk, afinal a page precisa ser incrementada a cada chamada.
 
+#### AfterCunk
+
 Criar um método para incrementar a page:
 
 ![img_16.png](img_16.png)
@@ -366,3 +374,159 @@ AfterChunk
 
 ![img_17.png](img_17.png)
 
+## Resumo ItemReader
+
+[Código]
+
+Esse leitor de batch realiza as seguintes tarefas em cada chunk:
+
+Busca Dados da API: Antes de processar o chunk, faz requisições para carregar a lista users com dados da API.
+
+Leitura Sequencial: O método read() lê um usuário de cada vez da lista users até o final do chunk.
+
+Preparação para o Próximo Chunk: Após cada chunk, incrementa a página, reseta userIndex e limpa users.
+
+### Atributos
+
+1. BASE_URL: A URL base do servidor onde está a API.
+
+```java
+private final String BASE_URL = "http://localhost:8081";
+```
+
+2. RestTemplate: Objeto para realizar chamadas HTTP.
+
+```java
+private RestTemplate restTemplate = new RestTemplate();
+```
+
+3. Variáveis de Controle:
+
+- page: controla a página atual dos dados a serem buscados.
+- users: armazena temporariamente os dados de UserDTO obtidos da API para o chunk atual.
+- userIndex: índice do usuário atual na lista users.
+
+```java
+private int page = 0;
+private List<UserDTO> users = new ArrayList<>();
+private int userIndex = 0;
+```
+
+4. Parâmetros Configuráveis (via @Value):
+
+- chunkSize: define o tamanho do chunk, ou seja, quantos usuários processar por vez.
+- pageSize: define quantos registros são obtidos por vez da API.
+
+```java
+@Value("${chunkSize}")
+private int chunkSize;
+
+@Value("${pageSize}")
+private int pageSize;
+```
+
+### Método read()
+
+O método read() é a implementação do método de leitura da interface ItemReader. Ele lê um único UserDTO da lista users e avança o índice (userIndex).
+
+
+```java
+@Override
+public UserDTO read() throws Exception, UnexpectedInputException, ParseException, NonTransientResourceException {
+UserDTO user;
+
+    if (userIndex < users.size()) {
+        user = users.get(userIndex);
+    } else {
+        user = null;
+    }
+
+    userIndex++;
+
+    return user;
+}
+```
+
+1. Verifica se há usuários na lista users: Se userIndex é menor que users.size(), retorna o usuário atual.
+2. Incrementa userIndex: Avança o índice para a próxima chamada de leitura.
+3. Retorna null ao final: Quando userIndex ultrapassa o tamanho da lista, retorna null, indicando o fim dos dados no chunk.
+
+### Método fetchUserDataFromAPI()
+
+Este método realiza uma chamada à API para buscar uma lista de UserDTO com base na página e no tamanho da página (pageSize).
+
+```java
+private List<UserDTO> fetchUserDataFromAPI() {
+String uri = BASE_URL + "/clients/pagedData?page=%d&size=%d";
+
+    ResponseEntity<ResponseUser> response = restTemplate.exchange(
+        String.format(uri, getPage(), pageSize),
+        HttpMethod.GET,
+        null,
+        new ParameterizedTypeReference<ResponseUser>() {}
+    );
+
+    List<UserDTO> result = response.getBody().getContent();
+    return result;
+}
+```
+
+Constrói a URL com parâmetros de página: Usa String.format para construir a URL com os valores de page e pageSize.
+
+Faz uma requisição GET: Usa RestTemplate para fazer a chamada GET e obter uma lista de UserDTO encapsulada em ResponseUser.
+
+Retorna a lista de UserDTO: Extrai a lista de usuários da resposta e a retorna.
+
+### Métodos getPage() e incrementPage()
+
+Estes métodos são auxiliares para controlar o número da página:
+
+
+```java
+public int getPage() {
+return page;
+}
+
+public void incrementPage() {
+this.page++;
+}
+```
+- getPage(): Retorna o valor atual da página.
+- incrementPage(): Incrementa o valor da página para carregar dados da próxima página na próxima chamada.
+
+### Métodos beforeChunk e afterChunk
+
+Estes métodos anotados com @BeforeChunk e @AfterChunk são executados antes e depois de cada chunk. Eles organizam o 
+carregamento e reset dos dados da lista users a cada chunk.
+
+#### Método beforeChunk()
+
+Antes do processamento do chunk, beforeChunk carrega usuários da API até preencher o tamanho do chunk (chunkSize).
+
+```java
+@BeforeChunk
+public void beforeChunk(ChunkContext context) {
+    for (int i = 0; i < chunkSize; i += pageSize) {
+        users.addAll(fetchUserDataFromAPI());
+    }
+}
+```
+
+1. Loop com incremento do tamanho da página: Carrega dados em partes até preencher o chunkSize.
+2. Chama fetchUserDataFromAPI(): Busca dados da API e os adiciona na lista users.
+
+#### Método afterChunk()
+
+Após o chunk ser processado, afterChunk realiza algumas ações de reset para preparar o leitor para o próximo chunk.
+
+```java
+@AfterChunk
+public void afterChunk(ChunkContext context) {
+    incrementPage();
+    userIndex = 0;
+    users.clear();
+}
+```
+1. incrementPage(): Incrementa a página para o próximo chunk.
+2. Reseta userIndex para 0: Começa a leitura do próximo chunk do início da lista users.
+3. Limpa a lista users: Remove todos os usuários para liberar memória e evitar dados duplicados no próximo chunk.
