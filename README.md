@@ -358,7 +358,7 @@ Esse evento ficará no finalzinho da classe, veja:
 
 ![img_14.png](img_14.png)
 
-Voltando para a função da API, colocaremos agora o pageSize nela:
+Voltando para a função da API, colocaremos agora o pageSize no primeiro parâmetro do exchange (dentro do String format):
 
 ![img_15.png](img_15.png)
 
@@ -366,17 +366,17 @@ Agora, teremos outro evento! O AfterChunk, afinal a page precisa ser incrementad
 
 #### AfterCunk
 
-Criar um método para incrementar a page:
+Criar um método para incrementar a page e um get para o pageSize que criamos lá em cima:
 
 ![img_16.png](img_16.png)
 
-AfterChunk
+Método:
 
 ![img_17.png](img_17.png)
 
 ## Resumo ItemReader
 
-[Código]
+[Código](https://github.com/zenonxd/estudo-spring-batch-APIremota/blob/master/user-request-springbatch/src/main/java/com/devsuperior/userrequestspringbatch/reader/FetchUserDataReaderConfig.java)
 
 Esse leitor de batch realiza as seguintes tarefas em cada chunk:
 
@@ -530,3 +530,120 @@ public void afterChunk(ChunkContext context) {
 1. incrementPage(): Incrementa a página para o próximo chunk.
 2. Reseta userIndex para 0: Começa a leitura do próximo chunk do início da lista users.
 3. Limpa a lista users: Remove todos os usuários para liberar memória e evitar dados duplicados no próximo chunk.
+
+## Sequência de execução
+
+1. Inicialização:
+
+O FetchUserDataReaderConfig é configurado como um ItemReader e implementa a interface ItemReader<UserDTO>.
+
+Variáveis page, users e userIndex são inicializadas para controlar a página atual da API, armazenar a lista de usuários 
+retornada pela API e o índice do usuário que será processado em cada chunk.
+
+2. Início do Chunk (Antes de Processar o Chunk) (beforeChunk):
+
+Esse método é executado antes do processamento de cada chunk.
+
+A função beforeChunk carrega dados na lista users conforme o tamanho de chunkSize, realizando múltiplas chamadas à API se necessário.
+
+A API é chamada através do método fetchUserDataFromAPI, que incrementa a página conforme necessário para preencher 
+users com o número de registros indicado em chunkSize.
+
+Isso garante que o chunk tenha dados suficientes para ser processado de acordo com o tamanho configurado.
+
+3. Leitura de Dados (read):
+
+O método read é chamado repetidamente pelo Spring Batch para ler cada item do chunk atual.
+
+Cada chamada a read retorna um usuário (UserDTO) da lista users.
+
+A lista users é percorrida usando userIndex, e a cada leitura, userIndex é incrementado.
+
+Quando userIndex atinge o tamanho de users, o método read retorna null, indicando que todos os dados do chunk atual foram lidos.
+
+4. Fim do Chunk (Depois de Processar o Chunk) (afterChunk):
+
+Esse método é executado após o processamento do chunk.
+
+Ele incrementa o número da página (incrementPage) para garantir que na próxima chamada da API uma nova página de dados seja buscada.
+
+Ele também reseta userIndex para 0 e limpa a lista users, preparando-a para o próximo chunk.
+
+## E a lista com 60 users, com chunkSize 10?
+
+Se a lista de usuários tiver 60 registros e o chunkSize estiver configurado para 10, o Spring Batch vai processar os 
+dados em chunks (ou lotes) de 10 usuários por vez. Abaixo, explico em detalhes como o código funcionaria neste cenário:
+
+1. Configuração inicial:
+
+- pageSize: Número de registros que serão buscados por vez da API. Vamos assumir, por exemplo, que pageSize é 10.
+- chunkSize: Número de registros que o Spring Batch vai processar em cada chunk, configurado como 10. 
+
+Dessa forma, o leitor vai buscar dados suficientes para preencher chunks de tamanho 10, mas com chamadas à API que 
+busquem múltiplos registros (10 por vez, conforme pageSize).
+
+2. Sequência de Execução em Cada Chunk
+
+### Primeiro Chunk
+   
+1. beforeChunk é executado:
+
+Como o chunkSize é 10, e o pageSize também é 10, o código faz uma chamada à API (fetchUserDataFromAPI), retornando os 
+primeiros 10 usuários da página 0.
+
+Esses 10 usuários são adicionados à lista users.
+
+2. read é chamado repetidamente:
+
+O read é executado 10 vezes, lendo um usuário da lista users por vez até atingir o tamanho do chunkSize.
+
+A cada execução de read, userIndex é incrementado para ler o próximo usuário da lista users.
+
+Após 10 leituras, userIndex atinge o tamanho de chunkSize, e read retorna null, indicando que o chunk foi processado.
+
+3. afterChunk é executado:
+
+Ao final do chunk, afterChunk é chamado:
+
+incrementPage() incrementa page de 0 para 1, indicando que a próxima chamada à API deve buscar a próxima página de dados.
+
+userIndex é resetado para 0.
+
+A lista users é limpa para preparar o próximo chunk.
+
+### Segundo Chunk
+
+1. beforeChunk é executado novamente:
+
+O código agora chama a API com page = 1 e pageSize = 10, buscando os próximos 10 usuários (usuários 11 a 20).
+
+Esses 10 usuários são adicionados à lista users.
+
+2. read é chamado novamente:
+
+read é chamado mais 10 vezes, processando o segundo conjunto de 10 usuários.
+
+Após 10 leituras, read retorna null novamente.
+
+3. afterChunk é executado:
+
+Incrementa page para 2.
+
+Reseta userIndex para 0 e limpa users.
+
+Repetição do Ciclo para os Próximos Chunks
+
+Esse ciclo se repete, processando 10 usuários por vez, até que todos os 60 usuários sejam processados. Ou seja:
+
+- Terceiro Chunk: Processa usuários 21 a 30.
+- Quarto Chunk: Processa usuários 31 a 40.
+- Quinto Chunk: Processa usuários 41 a 50.
+- Sexto Chunk: Processa usuários 51 a 60.
+- 
+Após o sexto chunk, todos os usuários foram processados, e o Spring Batch finaliza o job.
+
+Resumo da Sequência:
+
+- 6 chunks serão processados no total, cada um com 10 usuários.
+- Cada chunk faz uma chamada à API para preencher a lista users com 10 registros.
+- Após cada chunk, page é incrementado, e users é limpado para a próxima execução do chunk.
