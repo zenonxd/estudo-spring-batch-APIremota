@@ -374,7 +374,7 @@ Método:
 
 ![img_17.png](img_17.png)
 
-## Resumo ItemReader
+### Resumo ItemReader
 
 [Código](https://github.com/zenonxd/estudo-spring-batch-APIremota/blob/master/user-request-springbatch/src/main/java/com/devsuperior/userrequestspringbatch/reader/FetchUserDataReaderConfig.java)
 
@@ -531,7 +531,7 @@ public void afterChunk(ChunkContext context) {
 2. Reseta userIndex para 0: Começa a leitura do próximo chunk do início da lista users.
 3. Limpa a lista users: Remove todos os usuários para liberar memória e evitar dados duplicados no próximo chunk.
 
-## Sequência de execução
+### Sequência de execução de todo código
 
 1. Inicialização:
 
@@ -569,7 +569,7 @@ Ele incrementa o número da página (incrementPage) para garantir que na próxim
 
 Ele também reseta userIndex para 0 e limpa a lista users, preparando-a para o próximo chunk.
 
-## E a lista com 60 users, com chunkSize 10?
+### E a lista com 60 users, com chunkSize 10?
 
 Se a lista de usuários tiver 60 registros e o chunkSize estiver configurado para 10, o Spring Batch vai processar os 
 dados em chunks (ou lotes) de 10 usuários por vez. Abaixo, explico em detalhes como o código funcionaria neste cenário:
@@ -647,3 +647,208 @@ Resumo da Sequência:
 - 6 chunks serão processados no total, cada um com 10 usuários.
 - Cada chunk faz uma chamada à API para preencher a lista users com 10 registros.
 - Após cada chunk, page é incrementado, e users é limpado para a próxima execução do chunk.
+
+## Configurando ItemProcessor na classe de Step
+
+A partir do momento que obtemos os usuários pelo ItemReader, queremos fazer o seu processamento.
+
+Faremos uma simples projeção de dados, ou seja, obteremos somente alguns campos e não tudo (limitando alguns atributos).
+
+Vamos na classe de configuração do Step ``fetchUserDataAndStoreDbStepConfig``, e passaremos um 
+``ItemProcessor<UserDTO, User> selectFieldsUserDataProcessor``, o segundo parâmetro é o que ele retorna. Como será uma 
+projeção (processamento), será um objeto User (ou qualquer outro nome), o que devemos saber é: esse retorno é a 
+entidade do nosso negócio.
+
+Criaremos essa classe User no pacote entities. Seus atributos serão exatamente o que queremos de retorno.
+
+### User
+
+```java
+public class User {
+
+    private String login;
+    private String name;
+    private String avatarUrl;
+    
+    //construtor sem e com argumentos
+    //++ getters and setters and toString
+}
+```
+
+### selectFieldsUserDataProcessorConfig
+
+Criaremos a classe no pacote processor.
+
+Terá um método chamado ``selectFieldsUserDataProcessor`` (nome da classe sem o Config). Ele retornará um 
+``ItemProcessor<UserDTO, UserDTO>``. Dentro do método, daremos um return de um construtor: ``new ItemProcessor<UserDTO, User>()``.
+
+Esse construtor nos obrigará a implementar um método chamado process.
+
+Lembra da função read do ItemReader? Bom, a cada vez que o read é chamado ele vai lendo um UserDTO por vez, correto?
+Portanto, a medida que vamos lendo esse Usuário, precisamos processá-lo.
+
+Processar entenda por fazer uma projeção dos campos que queremos.
+
+Dentro do método instanciamos o User que criamos em entities e settamos a propriedade dos atributos que queremos tirando
+do UserDTO (que por sua vez, vem do ItemReader).
+
+```java
+@Configuration
+public class selectFieldsUserDataProcessorConfig  {
+
+    private static Logger logger = LoggerFactory.getLogger(selectFieldsUserDataProcessorConfig.class);
+
+    private int counter;
+
+    @Bean            //esse UserDTO ele obtém através do ItemReader e retorna um User
+    public ItemProcessor<UserDTO, User> selectFieldsUserDataProcessor() {
+        return new ItemProcessor<UserDTO, User>() {
+            @Override
+            public User process(UserDTO item) throws Exception {
+                User user = new User();
+                user.setLogin(item.getLogin());
+                user.setName(item.getName());
+                user.setAvatarUrl(item.getAvatarUrl());
+                logger.info("[PROCESSOR STEP] select user fields " + counter + user);
+                counter++;
+                return user;
+            }
+        };
+    }
+}
+```
+
+E olha que interessante, quando vemos o SOUT do logger no console, ele vai selecionar todos os atributos que colocamos
+de 10 em 10!
+
+![img_18.png](img_18.png)
+
+## Gravando dados em múltiplos bancos
+
+Vamos pensar o seguinte, nos temos o Job.
+
+O nosso Job irá ler os dados de uma API remota, processar e depois gravar esses registros em um banco de dados.
+
+### Mas... e os dados desse Job, onde salvar?
+
+Temos a opção 1:
+
+1. Gravar esses dados no mesmo banco de dados do Spring Batch (não é o ideal).
+
+Porém, essa não é uma boa prática. O ideal é a gente salvar os dados so Spring Batch em um banco reservado, onde nenhum
+outro Job tenha acesso a esse banco de dados.
+
+2. Gravar esses dados em outro banco (boa prática)
+
+Teremos um banco de dados primário para o nosso Spring Batch (onde os metadados serão salvos).
+
+Já o nosso Job terá os seus dados gravados em outro banco, próprio para os dados da aplicação.
+
+### Configurando múltiplos bancos na aplicação
+
+No phpMyAdmin, criar um outro banco, chamado "app".
+
+Em application.properties, configuraremos primeiro o banco dos metadados (principal) e depois para o Job.
+
+![img_26.png](img_26.png)
+
+Agora, criaremos uma classe de configuração para dizer como iremos obter esses datasources.
+
+### DataSourceConfig
+
+Primeiro criaremos um método para o banco de dados principal.
+
+Terá @Primary para dizer que essa base de dados é a principal. E passamos também um @ConfigurationProperties com o prefixo
+do que está declarado no ".properties".
+
+Depois, criamos o método para os metadados do Job. Terá também o @ConfigurationProperties com o prefixo do que está 
+declarado no ".properties".
+
+```java
+@Configuration
+public class DataSourceConfig {
+
+    //precisamos colocar esse DataSource como padrão, colocamos o Primary
+    @Primary
+    @Bean
+    //associaremos o DataSource aos dados de config do application.properties
+    //(o do banco principal, spring_batch)
+    @ConfigurationProperties(prefix = "spring.datasource")
+    public DataSource springBatchDB() {
+        return DataSourceBuilder.create().build();
+    }
+
+    @Bean
+    @ConfigurationProperties(prefix = "app.datasource")
+    public DataSource appDB() {
+        return DataSourceBuilder.create().build();
+    }
+}
+```
+
+E também teremos o Gerenciador de Transações (Transactional Manager)
+
+#### gerenciador de transacoes
+
+Lembra do TransactionalManager do Step? Precisamos informar um qualificador para informar de qual datasource vamos
+fazer esse gerenciamento de transações.
+
+O qualificador que queremos utilizar é o **banco de dados da nossa aplicação**. Passamos então dentro do parâmetro
+o @Qualifier("appDB"), nome do método que criamos.
+
+![img_20.png](img_20.png)
+
+Voltaremos para o Step e na declaração do TransactionalManager, passamos o @Qualifier com o nome do método.
+
+![img_21.png](img_21.png)
+
+## ItemWritter - Gravação dos dados no Banco de Dados
+
+Use esse script no phpMyAdmin.
+
+```sql
+CREATE DATABASE app;
+
+DROP TABLE IF EXISTS tb_user;
+
+CREATE TABLE tb_user(login VARCHAR(30), name VARCHAR(60), avatar_url VARCHAR(100), PRIMARY KEY(login));
+```
+
+![img_22.png](img_22.png)
+
+### ItemWriter
+
+Crie uma classe ``InsertUserDataDBWriterConfig`` no pacote writer.
+
+O método retornará um ``ItemWriter<User>`` e dentro do seu parâmetro, precisamos passar o datasource que queremos usar
+para gravar os dados. Se não passarmos nada, gravará no datasource primário (onde fica os metadados). Iremos passar
+o @Qualifier dentro do parâmetro.
+
+![img_25.png](img_25.png)
+
+Nós conseguimos acessar esse datasource, pois passamos o @Bean.
+
+![img_24.png](img_24.png)
+
+-pedir para o gpt explicar o codigo-
+
+```java
+@Configuration
+public class InsertUserDataDBWriterConfig {
+
+    @Bean
+    public ItemWriter<User> insertUserDataDBWriter(@Qualifier("appDB") DataSource dataSource) {
+        return new JdbcBatchItemWriterBuilder<User>()
+                .dataSource(dataSource)
+                                                                        //acessamos os valores com o ":"
+                .sql("INSERT INTO tb_user (login, name, avatar_url) VALUES (:login, :name, :avatar_url)")
+                //fonte do provider
+                .itemSqlParameterSourceProvider(new BeanPropertyItemSqlParameterSourceProvider<>())
+                .build();
+    }
+}
+```
+
+Ao iniciar o projeto, ele fará todos os procedimentos e irá inserir no banco de dados:
+
+![img_27.png](img_27.png)

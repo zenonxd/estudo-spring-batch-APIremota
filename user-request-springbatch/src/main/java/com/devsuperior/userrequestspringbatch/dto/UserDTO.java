@@ -8,6 +8,7 @@ public class UserDTO {
     private String login;
     private String name;
     private String location;
+
     private String avatarUrl;
     private Integer followers;
     private Integer following;
